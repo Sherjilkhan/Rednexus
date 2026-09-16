@@ -1,6 +1,6 @@
-# Raktasetu
+# RedNexus
 
-**Consumption-calibrated blood supply.** Blood banks collect in bursts at camps; hospitals consume every single day. Raktasetu closes that gap: it turns a blood bank's own daily usage data into a *proposed* minimum stock threshold and a recurring collection target, and it keeps a **named human in the loop** before any threshold is applied or any donor is contacted.
+**Consumption-calibrated blood supply.** Blood banks collect in bursts at camps; hospitals consume every single day. RedNexus closes that gap: it turns a blood bank's own daily usage data into a *proposed* minimum stock threshold and a recurring collection target, and it keeps a **named human in the loop** before any threshold is applied or any donor is contacted.
 
 - `frontend/` — React 18 + Vite + React Router + Recharts single-page app (donor, blood bank staff, platform admin)
 - `frontend/` — React 18 + Vite + React Router + Recharts single-page app (donor, blood bank staff, platform admin)
@@ -12,7 +12,7 @@
 
 | Role | Email | Password | Notes |
 | --- | --- | --- | --- |
-| Platform admin | `admin@raktasetu.in` | `admin123` | Verifies blood banks, sees platform stats + audit log |
+| Platform admin | `admin@RedNexus.in` | `admin123` | Verifies blood banks, sees platform stats + audit log |
 | Blood bank staff (verified) | `staff@citybank.in` | `staff123` | Anita Deshmukh — City Hospital Blood Bank (in-house, Pune 411001, licence MH-BB-2019-0431) |
 | Blood bank staff (unverified) | `staff@sunrise.in` | `staff123` | Ravi Patil — Sunrise Voluntary Blood Centre, still `PENDING`; every staff action is blocked until an admin verifies it |
 | Donor | `donor@example.com` | `donor123` | Priya Sharma, B− |
@@ -52,11 +52,11 @@ Health check: `curl localhost:3001/api/health` → `{"status":"ok","db_mode":"me
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3001` | HTTP port |
-| `DATABASE_URL` | — | **PostgreSQL connection URL** (e.g. `postgresql://user:pass@localhost:5432/raktasetu` or Supabase / Neon / Render / RDS) |
+| `DATABASE_URL` | — | **PostgreSQL connection URL** (e.g. `postgresql://user:pass@localhost:5432/RedNexus` or Supabase / Neon / Render / RDS) |
 | `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE` | — | Alternative individual PostgreSQL connection parameters |
 | `PGSSL` | `false` | Enable SSL for PostgreSQL connection (auto-detected if `sslmode=require` in URL) |
 | `DB_MODE` | — | Explicit database mode: `postgres`, `firestore`, or `memory` (auto-detected by default) |
-| `JWT_SECRET` | `raktasetu-dev-secret-change-me` | **Change in production.** Signs auth tokens |
+| `JWT_SECRET` | `RedNexus-dev-secret-change-me` | **Change in production.** Signs auth tokens |
 | `JWT_EXPIRY` | `12h` | Token lifetime |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | — | Raw service-account JSON **or** path to the JSON file for Firestore mode |
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | Standard ADC path to service-account file for Firestore mode |
@@ -71,19 +71,19 @@ Health check: `curl localhost:3001/api/health` → `{"status":"ok","db_mode":"me
 
 ### Using PostgreSQL (Recommended)
 
-1. Create a PostgreSQL database (e.g. `createdb raktasetu` or create a project on Supabase / Neon / RDS / Docker).
+1. Create a PostgreSQL database (e.g. `createdb RedNexus` or create a project on Supabase / Neon / RDS / Docker).
 2. Set your `DATABASE_URL` in `backend/.env` or environment:
    ```bash
-   DATABASE_URL=postgresql://postgres:password@localhost:5432/raktasetu
+   DATABASE_URL=postgresql://postgres:password@localhost:5432/RedNexus
    ```
 3. Start the backend:
    ```bash
    cd backend
    npm start
    ```
-   On startup, Raktasetu will:
+   On startup, RedNexus will:
    - Connect to PostgreSQL.
-   - Automatically execute table and index creation migrations from [`src/db/schema.sql`](file:///f:/raktasetu/raktasetu/backend/src/db/schema.sql).
+   - Automatically execute table and index creation migrations from [`src/db/schema.sql`](file:///f:/RedNexus/RedNexus/backend/src/db/schema.sql).
    - Seed default demo accounts and institutions if the database is empty (or when `SEED_ON_START=true`).
 4. Health check `GET /api/health` will report:
    ```json
@@ -95,7 +95,7 @@ Health check: `curl localhost:3001/api/health` → `{"status":"ok","db_mode":"me
 
 #### Running PostgreSQL via Docker (Quick Local Setup)
 ```bash
-docker run --name raktasetu-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=raktasetu -p 5432:5432 -d postgres:16
+docker run --name RedNexus-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=RedNexus -p 5432:5432 -d postgres:16
 ```
 
 ---
@@ -106,9 +106,9 @@ docker run --name raktasetu-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_D
 2. Project settings → Service accounts → **Generate new private key**.
 3. Provide the key to the backend:
    ```bash
-   export GOOGLE_APPLICATION_CREDENTIALS=/secure/path/raktasetu-sa.json
+   export GOOGLE_APPLICATION_CREDENTIALS=/secure/path/RedNexus-sa.json
    # or
-   export FIREBASE_SERVICE_ACCOUNT_JSON="$(cat /secure/path/raktasetu-sa.json)"
+   export FIREBASE_SERVICE_ACCOUNT_JSON="$(cat /secure/path/RedNexus-sa.json)"
    ```
 4. Start the backend. `GET /api/health` will report `"db_mode":"firestore"`.
 5. Optionally seed a fresh project once with `SEED_ON_START=true npm start` (then unset it — in Firestore mode seeding is skipped by default).
@@ -190,5 +190,6 @@ docker run --name raktasetu-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_D
 | T2–T4 threshold engine + human confirmation | `services/thresholdService.js`, `pages/bank/BankThresholds.jsx` |
 | T5 stock + breach detection | `services/requestService.js` (`detectBreaches`), `pages/bank/BankOverview.jsx` |
 | Audit | `services/audit.js`, `pages/bank/BankAudit.jsx`, `pages/admin/AdminAudit.jsx` |
-#   R e d n e x u s  
+#   R e d n e x u s 
+ 
  
