@@ -2,43 +2,56 @@ import { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import { useAuth } from '../../auth.jsx';
 import { useToast } from '../../components/Toast.jsx';
-import { Loading } from '../../components/ui.jsx';
-
-const BLOOD_GROUPS = ['A+','A−','B+','B−','AB+','AB−','O+','O−'];
+import { Loading, BLOOD_GROUPS } from '../../components/ui.jsx';
 
 export default function DonorProfile() {
   const { user } = useAuth();
   const toast = useToast();
   const [donor, setDonor] = useState(null);
-  const [busy, setBusy] = useState(false);
   const [form, setForm] = useState(null);
-  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
+  const [busy, setBusy] = useState(false);
+  const [pw, setPw] = useState({ current: '', next: '', confirm: '' });
   const [pwBusy, setPwBusy] = useState(false);
 
   useEffect(() => {
     api('/donor/profile').then(d => {
-      const dn = d.donor || d;
+      const dn = d.donor;
       setDonor(dn);
       setForm({
-        name:        dn.name || '',
+        name: dn.name || '',
         contact_phone: dn.contact_phone || '',
-        area_pincode:  dn.area_pincode || '',
-        blood_group:   dn.blood_group_self_reported || '',
-        gender:        dn.gender || '',
+        area_pincode: dn.area_pincode || '',
+        blood_group: dn.blood_group_self_reported || '',
+        gender: dn.gender || '',
         date_of_birth: dn.date_of_birth || '',
-        occupation:    dn.occupation || '',
-        address:       dn.address || '',
+        donation_type: dn.donation_type || 'VOLUNTARY',
+        patient_name: dn.patient_name || '',
       });
     }).catch(() => {});
   }, []);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  async function save(e) {
+  async function saveProfile(e) {
     e.preventDefault();
     setBusy(true);
     try {
-      await api('/donor/profile', { method: 'PUT', body: form });
+      const res = await api('/donor/profile', { method: 'PUT', body: form });
+      // Refresh form from server response so displayed values match DB
+      if (res?.donor) {
+        const dn = res.donor;
+        setDonor(dn);
+        setForm({
+          name:          dn.name || '',
+          contact_phone: dn.contact_phone || '',
+          area_pincode:  dn.area_pincode || '',
+          blood_group:   dn.blood_group_self_reported || '',
+          gender:        dn.gender || '',
+          date_of_birth: dn.date_of_birth || '',
+          donation_type: dn.donation_type || 'VOLUNTARY',
+          patient_name:  dn.patient_name || '',
+        });
+      }
       toast('Profile updated ✓', 'ok');
     } catch (err) { toast(err.message, 'err'); }
     finally { setBusy(false); }
@@ -46,12 +59,12 @@ export default function DonorProfile() {
 
   async function changePassword(e) {
     e.preventDefault();
-    if (pwForm.next !== pwForm.confirm) { toast('Passwords do not match', 'err'); return; }
-    if (pwForm.next.length < 6) { toast('Password must be at least 6 characters', 'err'); return; }
+    if (pw.next !== pw.confirm) { toast('Passwords do not match', 'err'); return; }
+    if (pw.next.length < 6) { toast('Minimum 6 characters', 'err'); return; }
     setPwBusy(true);
     try {
-      await api('/auth/change-password', { method: 'POST', body: { current_password: pwForm.current, new_password: pwForm.next } });
-      setPwForm({ current: '', next: '', confirm: '' });
+      await api('/auth/change-password', { method: 'POST', body: { current_password: pw.current, new_password: pw.next } });
+      setPw({ current: '', next: '', confirm: '' });
       toast('Password changed ✓', 'ok');
     } catch (err) { toast(err.message, 'err'); }
     finally { setPwBusy(false); }
@@ -64,13 +77,12 @@ export default function DonorProfile() {
       <div>
         <span className="eyebrow">Account</span>
         <h1 style={{ margin: '8px 0 4px' }}>My profile</h1>
-        <p className="small muted">Update your personal details. Blood group changes are marked self-reported until verified by staff.</p>
+        <p className="small muted">Update your details. Blood group changes are marked self-reported until verified by staff.</p>
       </div>
 
-      {/* ── Personal details ─────────────────────────────── */}
-      <form className="card stack" onSubmit={save}>
+      {/* ── Personal details ────────────────────────── */}
+      <form className="card stack" onSubmit={saveProfile}>
         <h4 style={{ margin: 0 }}>Personal details</h4>
-
         <div className="grid grid-2" style={{ gap: 16 }}>
           <div className="field">
             <label>Full name</label>
@@ -84,7 +96,9 @@ export default function DonorProfile() {
             <label>Blood group</label>
             <select value={form.blood_group} onChange={e => set('blood_group', e.target.value)}>
               <option value="">— select —</option>
-              {BLOOD_GROUPS.map(g => <option key={g} value={g}>{g}</option>)}
+              {(BLOOD_GROUPS || ['A+','A−','B+','B−','AB+','AB−','O+','O−']).map(g => (
+                <option key={g} value={g}>{g}</option>
+              ))}
             </select>
           </div>
           <div className="field">
@@ -105,23 +119,27 @@ export default function DonorProfile() {
             <input value={form.area_pincode} onChange={e => set('area_pincode', e.target.value)} maxLength={6} />
           </div>
           <div className="field">
-            <label>Occupation</label>
-            <input value={form.occupation} onChange={e => set('occupation', e.target.value)} />
+            <label>Donation type</label>
+            <select value={form.donation_type} onChange={e => set('donation_type', e.target.value)}>
+              <option value="VOLUNTARY">Voluntary</option>
+              <option value="REPLACEMENT">Replacement</option>
+            </select>
           </div>
+          {form.donation_type === 'REPLACEMENT' && (
+            <div className="field">
+              <label>Patient name</label>
+              <input value={form.patient_name} onChange={e => set('patient_name', e.target.value)} />
+            </div>
+          )}
           <div className="field">
             <label>Email <span className="muted">(read-only)</span></label>
-            <input value={user.email || ''} disabled style={{ opacity: 0.6 }} />
+            <input value={user?.email || ''} disabled style={{ opacity: 0.6 }} />
           </div>
-        </div>
-
-        <div className="field">
-          <label>Address</label>
-          <input value={form.address} onChange={e => set('address', e.target.value)} placeholder="Street, city, state" />
         </div>
 
         {donor?.blood_group_verified && (
           <div className="note" style={{ background: '#f0fdf4', borderColor: '#bbf7d0', borderRadius: 8, padding: '10px 14px' }}>
-            <span className="small">Your blood group has been <strong>verified</strong> by staff as <strong>{donor.blood_group_verified}</strong>. Changing it here marks it self-reported again.</span>
+            <span className="small">Your blood group is <strong>verified</strong> as <strong>{donor.blood_group_verified}</strong> by staff. Changing it here marks it self-reported again.</span>
           </div>
         )}
 
@@ -130,28 +148,45 @@ export default function DonorProfile() {
         </div>
       </form>
 
-      {/* ── Change password ───────────────────────────────── */}
+      {/* ── Change password ──────────────────────────── */}
       <form className="card stack" onSubmit={changePassword}>
         <h4 style={{ margin: 0 }}>Change password</h4>
         <div className="grid grid-2" style={{ gap: 16 }}>
-          <div className="field">
+          <div className="field" style={{ gridColumn: '1 / -1' }}>
             <label>Current password</label>
-            <input type="password" value={pwForm.current} onChange={e => setPwForm(p => ({ ...p, current: e.target.value }))} required />
+            <input type="password" value={pw.current} onChange={e => setPw(p => ({ ...p, current: e.target.value }))} required />
           </div>
-          <div style={{}} /> {/* spacer */}
           <div className="field">
             <label>New password</label>
-            <input type="password" value={pwForm.next} onChange={e => setPwForm(p => ({ ...p, next: e.target.value }))} minLength={6} required />
+            <input type="password" value={pw.next} onChange={e => setPw(p => ({ ...p, next: e.target.value }))} minLength={6} required />
           </div>
           <div className="field">
             <label>Confirm new password</label>
-            <input type="password" value={pwForm.confirm} onChange={e => setPwForm(p => ({ ...p, confirm: e.target.value }))} minLength={6} required />
+            <input type="password" value={pw.confirm} onChange={e => setPw(p => ({ ...p, confirm: e.target.value }))} minLength={6} required />
           </div>
         </div>
         <div className="row">
           <button className="btn-ghost" type="submit" disabled={pwBusy}>{pwBusy ? 'Updating…' : 'Update password'}</button>
         </div>
       </form>
+
+      {/* ── Account status ──────────────────────────── */}
+      <div className="card stack-sm">
+        <h4 style={{ margin: 0 }}>Account status</h4>
+        <div className="grid grid-2" style={{ gap: 12 }}>
+          {[
+            ['Status', donor?.status],
+            ['Email verified', donor?.phone_verified ? 'Yes ✓' : 'Pending'],
+            ['Donor ID', donor?.id?.slice(0, 8) + '…'],
+            ['Member since', donor?.created_at ? new Date(donor.created_at).toLocaleDateString('en-IN') : '—'],
+          ].map(([label, val]) => (
+            <div key={label} style={{ background: 'var(--surface-1, #f9fafb)', borderRadius: 8, padding: '10px 14px' }}>
+              <div className="xs muted" style={{ marginBottom: 4 }}>{label}</div>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{val || '—'}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
