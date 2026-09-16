@@ -269,3 +269,43 @@ export const submitQuestionnaire = wrap(async (req, res) => {
 
   res.json({ saved: true, id: doc.id });
 });
+/* --- resend verification OTP --- */
+export const resendOtp = wrap(async (req, res) => {
+  const { sendVerificationOtp } = await import('../services/emailService.js');
+  const donor = await getDoc(COLLECTIONS.donors, req.params.donorId);
+  if (!donor) throw notFound('Donor not found');
+  const result = await sendVerificationOtp(donor.email, donor.name);
+  res.json({ sent: true, otp_hint: result.code && process.env.NODE_ENV !== 'production' ? result.code : null });
+});
+
+/* --- password reset --- */
+export const forgotPassword = wrap(async (req, res) => {
+  await auth.requestPasswordReset(req.body.email);
+  res.json({ sent: true });
+});
+export const verifyResetOtp = wrap(async (req, res) => {
+  const { verifyOtp } = await import('../services/emailService.js');
+  await verifyOtp(req.body.email, req.body.code, 'RESET_PASSWORD');
+  res.json({ valid: true });
+});
+export const resetPassword = wrap(async (req, res) => {
+  await auth.resetPassword(req.body.email, req.body.code, req.body.new_password);
+  res.json({ reset: true });
+});
+
+/* --- accepted donor management --- */
+export const listAcceptedDonors = wrap(async (req, res) => {
+  res.json({ donors: await requests.listAcceptedDonors(req.params.id, req.user) });
+});
+export const assignAppointment = wrap(async (req, res) => {
+  res.json(await requests.assignAppointment(req.params.id, req.params.nid, req.body, req.user));
+});
+export const notifyAppointment = wrap(async (req, res) => {
+  res.json(await requests.notifyAppointment(req.params.id, req.params.nid, req.user));
+});
+export const markDonorArrived = wrap(async (req, res) => {
+  res.json(await requests.markDonorArrived(req.params.id, req.params.nid, req.user));
+});
+export const recordIndividualDonation = wrap(async (req, res) => {
+  res.json(await requests.recordIndividualDonation(req.params.id, req.params.nid, req.body, req.user));
+});
