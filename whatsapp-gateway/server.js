@@ -74,37 +74,59 @@ async function launchBrowser() {
 // ── Check if already logged in ────────────────────────────────────────────────
 async function isLoggedIn() {
   try {
-    await page.waitForFunction(
+    // Try multiple selectors - WhatsApp Web changes class names frequently
+    const checks = [
+      `document.querySelector('[data-testid="chat-list"]') !== null`,
+      `document.querySelector('div[aria-label="Chat list"]') !== null`,
+      "document.querySelector('#pane-side') !== null",
+      `document.querySelector('[data-tab="3"]') !== null`,
       "document.getElementsByClassName('two')[0] !== undefined",
-      { timeout: 8000 }
-    );
-    return true;
+    ];
+    for (const check of checks) {
+      try {
+        await page.waitForFunction(check, { timeout: 3000 });
+        return true;
+      } catch {}
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
-// ── Capture QR code ───────────────────────────────────────────────────────────
+// ── Capture QR code — polls continuously so the stored QR stays fresh ────────
 async function waitForQR() {
   console.log('[Gateway] Waiting for QR code...');
   try {
     await page.waitForSelector('div[data-ref]', { timeout: 30000 });
-    const qrEl = await page.$('div[data-ref] canvas');
-    if (qrEl) {
-      qrBase64 = await page.evaluate(el => el.toDataURL('image/png'), qrEl);
-    } else {
-      // Fallback: screenshot of the QR area
-      const box = await page.$('div[data-ref]');
-      if (box) {
-        const clip = await box.boundingBox();
-        const shot = await page.screenshot({ clip, encoding: 'base64' });
-        qrBase64 = `data:image/png;base64,${shot}`;
-      }
-    }
     console.log('[Gateway] QR ready — visit GET /qr to scan');
   } catch (e) {
-    console.error('[Gateway] Could not capture QR:', e.message);
+    console.error('[Gateway] Could not find QR element:', e.message);
+    return;
   }
+
+  // Keep capturing the latest QR silently — WhatsApp rotates it every ~20s.
+  // The /qr endpoint serves whatever is in qrBase64 at request time.
+  // User DOES NOT need to refresh — they just scan the current image.
+  const captureQR = async () => {
+    if (waReady) return; // stop once logged in
+    try {
+      const qrEl = await page.$('div[data-ref] canvas');
+      if (qrEl) {
+        qrBase64 = await page.evaluate(el => el.toDataURL('image/png'), qrEl);
+      } else {
+        const box = await page.$('div[data-ref]');
+        if (box) {
+          const clip = await box.boundingBox();
+          const shot = await page.screenshot({ clip, encoding: 'base64' });
+          qrBase64 = `data:image/png;base64,${shot}`;
+        }
+      }
+    } catch { /* ignore — QR may be transitioning */ }
+    if (!waReady) setTimeout(captureQR, 3000); // re-capture silently every 3s
+  };
+
+  await captureQR(); // first capture
 }
 
 // ── Main startup ──────────────────────────────────────────────────────────────
@@ -128,9 +150,12 @@ async function startWA() {
     await waitForQR();
 
     // Poll until logged in (user scanned QR)
+    console.log('[Gateway] QR displayed — waiting for scan...');
     const check = setInterval(async () => {
       try {
-        if (await isLoggedIn()) {
+        const loggedIn = await isLoggedIn();
+        console.log('[Gateway] Login check:', loggedIn);
+        if (loggedIn) {
           clearInterval(check);
           waReady    = true;
           startingUp = false;
@@ -138,8 +163,10 @@ async function startWA() {
           console.log('[Gateway] ✅ WhatsApp connected!');
           flushQueue();
         }
-      } catch {}
-    }, 3000);
+      } catch (e) {
+        console.error('[Gateway] Login check error:', e.message);
+      }
+    }, 2000);
 
   } catch (err) {
     startingUp = false;
@@ -209,19 +236,39 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', whatsapp_ready: waReady, qr_available: !!qrBase64 });
 });
 
-// QR code as HTML page — open in browser, scan with WhatsApp
+// QR as raw PNG image — no HTML, no JavaScript, no refresh
+// Open /qr-page in browser to see it nicely wrapped
 app.get('/qr', (_req, res) => {
   if (waReady) return res.send('<h2>✅ Already connected</h2>');
   if (!qrBase64) return res.send('<h2>QR not ready yet</h2><p>Wait 15 seconds then <a href="/qr">click here</a></p>');
-  res.send(`
-    <!DOCTYPE html><html><head><title>Scan QR</title></head><body style="text-align:center;font-family:sans-serif;padding:40px">
-    <h2>🩸 Raktasetu WhatsApp</h2>
-    <p>Scan this QR with WhatsApp → Linked Devices → Link a Device</p>
-    <img src="${qrBase64}" style="width:300px;height:300px;border:2px solid #dc2626;border-radius:12px" />
-    <p style="color:#666;font-size:13px">QR expires in ~60 seconds. Only refresh manually if it expires.</p>
-    <br/><button onclick="location.reload()" style="padding:10px 24px;background:#dc2626;color:white;border:none;border-radius:8px;font-size:15px;cursor:pointer">Refresh QR manually</button>
-    </body></html>
-  `);
+  // Serve QR as a plain image — no HTML refresh, no JavaScript at all
+  // The image src points to /qr-image which serves the raw PNG
+  const imgData = qrBase64.replace('data:image/png;base64,', '');
+  const buf = Buffer.from(imgData, 'base64');
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(buf);
+});
+
+// QR as HTML page (for browser viewing)
+app.get('/qr-page', (_req, res) => {
+  if (waReady) {
+    return res.send('<html><body style="text-align:center;font-family:sans-serif;padding:40px"><h2 style="color:green">✅ WhatsApp Connected!</h2><p>The gateway is ready to send messages.</p></body></html>');
+  }
+  if (!qrBase64) {
+    return res.send('<html><head><meta http-equiv="refresh" content="5"></head><body style="text-align:center;font-family:sans-serif;padding:40px"><h2>⏳ Starting up...</h2><p>QR not ready yet. Page will refresh automatically.</p></body></html>');
+  }
+  res.send(`<html><head><title>Scan QR - Raktasetu</title></head>
+  <body style="text-align:center;font-family:sans-serif;padding:40px;background:#fff5f5">
+  <h2 style="color:#b91c1c">🩸 Raktasetu WhatsApp Gateway</h2>
+  <p style="font-size:16px">Open WhatsApp on your phone</p>
+  <p style="font-size:16px">Tap <b>Linked Devices → Link a Device</b> → Scan the QR below</p>
+  <div style="display:inline-block;padding:16px;background:white;border:3px solid #dc2626;border-radius:16px;margin:16px 0">
+    <img src="/qr" style="width:280px;height:280px;display:block" />
+  </div>
+  <p style="color:#888;font-size:13px">The QR image updates automatically in the background.<br>Do NOT refresh this page — just scan what you see.</p>
+  <p style="margin-top:20px"><a href="/health" style="color:#dc2626">Check connection status</a></p>
+  </body></html>`);
 });
 
 // Send a message

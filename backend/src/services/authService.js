@@ -3,7 +3,6 @@ import jwt from 'jsonwebtoken';
 import { COLLECTIONS, getDoc, listDocs, updateDoc } from '../db/index.js';
 import { JWT_EXPIRY, JWT_SECRET } from '../config.js';
 import { unauthorized, badRequest, notFound } from './errors.js';
-import { sendPasswordResetOtp, verifyOtp } from './emailService.js';
 
 export async function login(email, password) {
   const users = await listDocs(COLLECTIONS.users, [['email', '==', String(email).toLowerCase()]]);
@@ -43,42 +42,23 @@ export async function userFromToken(token) {
   return sessionFor(user);
 }
 
-/** Request a password reset OTP — sent to the user's registered email */
+/** Request a password reset OTP */
 export async function requestPasswordReset(email) {
   const users = await listDocs(COLLECTIONS.users, [['email', '==', String(email).toLowerCase()]]);
-  // Always respond the same way to prevent email enumeration
-  if (!users.length) return { sent: true };
-  const user = users[0];
-  await sendPasswordResetOtp(user.email);
+  if (!users.length) return { sent: true }; // don't reveal if email exists
+  const { sendPasswordResetOtp } = await import('./emailService.js');
+  await sendPasswordResetOtp(users[0].email);
   return { sent: true };
 }
 
-/** Verify the reset OTP and save the new password */
+/** Verify reset OTP and save new password */
 export async function resetPassword(email, code, newPassword) {
   if (!newPassword || newPassword.length < 6) throw badRequest('Password must be at least 6 characters');
-
-  // OTP was already verified and marked used by /auth/verify-reset-otp.
-  // Here we only check a recently-used OTP exists for this email as proof the
-  // frontend completed the verify step — we do NOT call verifyOtp() again.
-  const { COLLECTIONS: C, listDocs: ld } = await import('../db/index.js');
-  const otps = await ld(C.otps, [['email', '==', email.toLowerCase()]]);
-  const valid = otps.find(o =>
-    o.purpose === 'RESET_PASSWORD' &&
-    o.used === true &&
-    !o.invalidated &&
-    new Date(o.expires_at) > new Date()  // still within original expiry window
-  );
-  if (!valid) throw badRequest('Reset session expired. Please start over.');
-
+  const { verifyOtp } = await import('./emailService.js');
+  await verifyOtp(email.toLowerCase(), code, 'RESET_PASSWORD');
   const users = await listDocs(COLLECTIONS.users, [['email', '==', String(email).toLowerCase()]]);
   if (!users.length) throw notFound('User not found');
-
-  const user = users[0];
   const hash = bcrypt.hashSync(newPassword, 10);
-  await updateDoc(COLLECTIONS.users, user.id, { password_hash: hash });
-
-  // Invalidate so the same OTP can't be reused for another reset
-  await updateDoc(C.otps, valid.id, { invalidated: true });
-
+  await updateDoc(COLLECTIONS.users, users[0].id, { password_hash: hash });
   return { reset: true };
 }
