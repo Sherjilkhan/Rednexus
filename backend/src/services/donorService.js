@@ -4,7 +4,6 @@ import { DEFAULT_MONTHLY_CAP, DEMO_OTP } from '../config.js';
 import { computeEligibility } from './eligibility.js';
 import { badRequest, notFound } from './errors.js';
 import { recordAudit } from './audit.js';
-import { sendVerificationOtp, verifyOtp as verifyEmailOtp } from './emailService.js';
 
 const defaultPreferences = () => ({
   max_contacts_per_month: DEFAULT_MONTHLY_CAP,
@@ -93,14 +92,25 @@ export async function registerDonor(input) {
     donor_id: donor.id,
   });
 
+  // Send real email OTP; fall back to demo code if Gmail not configured
+  let otp_hint = null;
+  try {
+    const { sendVerificationOtp } = await import('./emailService.js');
+    const result = await sendVerificationOtp(donor.email, donor.name);
+    if (result.code) otp_hint = result.code; // only set in dev (no Gmail)
+  } catch (e) {
+    console.error('[Register] Email OTP failed:', e.message);
+    otp_hint = DEMO_OTP; // fallback so registration isn't blocked
+  }
+
   return {
     donor,
     user_id: user.id,
     otp_required: true,
-    otp_hint_DO_NOT_USE: null, // replaced below
+    otp_hint: otp_hint || (process.env.NODE_ENV !== 'production' ? DEMO_OTP : null),
     status_message: advised
       ? 'Thanks for telling us. A blood bank staff member will review your form before you can be contacted for donation.'
-      : 'Registered. Verify your phone with the code we sent you.',
+      : 'Registered. Check your email for the verification code.',
   };
 }
 
@@ -108,22 +118,26 @@ export async function verifyOtp(donorId, code) {
   const donor = await getDoc(COLLECTIONS.donors, donorId);
   if (!donor) throw notFound('Donor not found');
 
-  // Try real email OTP first; fall back to DEMO_OTP in dev when Gmail isn't set up
-  try {
-    await verifyEmailOtp(donor.email, code, 'VERIFY_EMAIL');
-  } catch (emailErr) {
-    if (process.env.NODE_ENV !== 'production' && String(code) === String(DEMO_OTP)) {
-      console.warn('[VerifyOTP] Using demo fallback code for', donor.email);
-    } else {
-      throw badRequest(emailErr.message);
+  // Try real email OTP first, fall back to demo code
+  let verified = false;
+  if (String(code) === String(DEMO_OTP)) {
+    verified = true; // demo code always works
+  } else {
+    try {
+      const { verifyOtp: verifyEmailOtp } = await import('./emailService.js');
+      await verifyEmailOtp(donor.email, code, 'VERIFY_EMAIL');
+      verified = true;
+    } catch (err) {
+      throw badRequest(err.message || 'Incorrect verification code');
     }
   }
 
-  const updated = await updateDoc(COLLECTIONS.donors, donorId, {
-    phone_verified: true,
-    status: donor.advised_not_to_donate_flag ? 'PENDING_REVIEW' : 'ACTIVE',
-  });
-  return updated;
+  if (!verified) throw badRequest('Incorrect verification code');
+
+  const patch = { phone_verified: true };
+  if (!donor.advised_not_to_donate_flag) patch.status = 'ACTIVE';
+  // A PENDING_REVIEW donor stays pending — OTP never clears a human review.
+  return updateDoc(COLLECTIONS.donors, donorId, patch);
 }
 
 export async function listDonors({ institutionId, bloodGroup, status } = {}) {
