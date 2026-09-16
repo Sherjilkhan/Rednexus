@@ -2,3 +2,4 @@ node_modules/
 dist/
 .env
 .DS_Store
+whatsapp-gateway/wa_session/
