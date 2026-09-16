@@ -190,3 +190,5 @@ docker run --name raktasetu-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_D
 | T2–T4 threshold engine + human confirmation | `services/thresholdService.js`, `pages/bank/BankThresholds.jsx` |
 | T5 stock + breach detection | `services/requestService.js` (`detectBreaches`), `pages/bank/BankOverview.jsx` |
 | Audit | `services/audit.js`, `pages/bank/BankAudit.jsx`, `pages/admin/AdminAudit.jsx` |
+#   R e d n e x u s  
+ 
