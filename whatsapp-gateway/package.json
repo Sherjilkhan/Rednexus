@@ -1,14 +1,16 @@
 {
   "name": "raktasetu-whatsapp-gateway",
   "version": "1.0.0",
-  "description": "wbm-based WhatsApp gateway for Raktasetu donor notifications",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "postinstall": "node -e \"require('puppeteer').executablePath().then ? '' : ''\""
   },
   "dependencies": {
     "express": "^4.19.2",
-    "wbm": "^1.1.16"
+    "puppeteer": "^24.15.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
