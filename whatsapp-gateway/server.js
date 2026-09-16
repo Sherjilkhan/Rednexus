@@ -40,7 +40,7 @@ function auth(req, res, next) {
 async function launchBrowser() {
   if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-  browser = await puppeteer.launch({
+  const launchOptions = {
     headless: 'new',
     args: [
       '--no-sandbox',
@@ -52,7 +52,15 @@ async function launchBrowser() {
       '--single-process',
     ],
     userDataDir: SESSION_DIR,   // saves session — no re-scan after restart
-  });
+  };
+
+  // Use system Chromium if available (Docker/Railway/Render)
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    console.log('[Gateway] Using system Chromium:', process.env.PUPPETEER_EXECUTABLE_PATH);
+  }
+
+  browser = await puppeteer.launch(launchOptions);
 
   page = await browser.newPage();
   await page.setUserAgent(
@@ -204,14 +212,14 @@ app.get('/health', (_req, res) => {
 // QR code as HTML page — open in browser, scan with WhatsApp
 app.get('/qr', (_req, res) => {
   if (waReady) return res.send('<h2>✅ Already connected</h2>');
-  if (!qrBase64) return res.send('<h2>QR not ready yet — try again in 10 seconds</h2><script>setTimeout(()=>location.reload(),5000)</script>');
+  if (!qrBase64) return res.send('<h2>QR not ready yet</h2><p>Wait 15 seconds then <a href="/qr">click here</a></p>');
   res.send(`
     <!DOCTYPE html><html><head><title>Scan QR</title></head><body style="text-align:center;font-family:sans-serif;padding:40px">
     <h2>🩸 Raktasetu WhatsApp</h2>
     <p>Scan this QR with WhatsApp → Linked Devices → Link a Device</p>
     <img src="${qrBase64}" style="width:300px;height:300px;border:2px solid #dc2626;border-radius:12px" />
-    <p style="color:#666;font-size:13px">Page auto-refreshes every 5 seconds</p>
-    <script>setTimeout(()=>location.reload(),5000)</script>
+    <p style="color:#666;font-size:13px">QR expires in ~60 seconds. Only refresh manually if it expires.</p>
+    <br/><button onclick="location.reload()" style="padding:10px 24px;background:#dc2626;color:white;border:none;border-radius:8px;font-size:15px;cursor:pointer">Refresh QR manually</button>
     </body></html>
   `);
 });
