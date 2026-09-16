@@ -3,10 +3,9 @@ import { NOTIFY_STAGE_MULTIPLIER, DEFAULT_MONTHLY_CAP } from '../config.js';
 import { contactable } from './eligibility.js';
 import { badRequest, conflict, forbidden, notFound } from './errors.js';
 import { recordAudit } from './audit.js';
-import { getConfirmedThreshold, setStock, stockLevels, thresholdOverview } from './thresholdService.js';
+import { getConfirmedThreshold, stockLevels, thresholdOverview } from './thresholdService.js';
 import { recordDonation } from './donorService.js';
 import { sendDonorWhatsApp } from './whatsappServices.js';
-import { saveQuestionnaire } from './questionnaireService.js';
 
 /* ---------------- Request state machine ---------------- */
 
@@ -330,17 +329,6 @@ export async function respondToNotification(notificationId, donorId, response, q
     response_time_minutes: Math.round((Date.now() - sent.getTime()) / 60000),
   });
 
-  // Save questionnaire to DB + Google Sheets whenever one is submitted (ACCEPTED with questionnaire)
-  if (response === 'ACCEPTED' && questionnaire) {
-    saveQuestionnaire({
-      source: 'EMERGENCY',
-      donor_id: donorId,
-      notification_id: notificationId,
-      institution_name: log.institution_name || null,
-      questionnaire,
-    }).catch(e => console.error('[Questionnaire] Save error:', e));
-  }
-
   const request = await getDoc(COLLECTIONS.requests, log.request_id);
   if (response === 'ACCEPTED' && request && request.state === 'NOTIFIED') {
     const logs = await listDocs(COLLECTIONS.notifications, [['request_id', '==', request.id]]);
@@ -446,79 +434,40 @@ export async function requestDetail(requestId, viewer) {
 }
 
 export { stockLevels, getConfirmedThreshold };
-/* ──────────────────────────────────────────────────────────────────────────────
-   ACCEPTED-DONOR MANAGEMENT
-   After request reaches ACCEPTED state, staff can:
-   1. shortlist()/reject accepted donors
-   2. assignAppointment() — give a date+time to shortlisted donors
-   3. notifyAppointment() — send WhatsApp + in-app message about their slot
-   4. recordDonorArrival() — mark a specific donor ARRIVED
-   5. recordDonorDonation() — log units donated per donor, auto-close if threshold met
-   ─────────────────────────────────────────────────────────────────────────── */
 
-/** List accepted donors for a request with their shortlist status */
+/* ── ACCEPTED DONOR MANAGEMENT ───────────────────────────────────────────── */
+
 export async function listAcceptedDonors(requestId, actor) {
   const request = await getDoc(COLLECTIONS.requests, requestId);
   if (!request) throw notFound('Request not found');
   if (actor.role !== 'BLOOD_BANK_STAFF' || actor.institution_id !== request.institution_id) throw forbidden();
 
-  const logs = await listDocs(COLLECTIONS.notifications, [['request_id', '==', requestId]]);
-  const donors = await listDocs(COLLECTIONS.donors);
+  const logs    = await listDocs(COLLECTIONS.notifications, [['request_id', '==', requestId]]);
+  const donors  = await listDocs(COLLECTIONS.donors);
 
   return logs
     .filter(l => l.response === 'ACCEPTED')
     .map(l => {
       const donor = donors.find(d => d.id === l.donor_id) || {};
       return {
-        notification_id: l.id,
-        donor_id: l.donor_id,
-        donor_name: donor.name || 'Donor',
-        donor_phone: donor.contact_phone || null,
-        blood_group: donor.blood_group_verified || donor.blood_group_self_reported || request.blood_group,
-        response_at: l.response_at,
-        shortlisted: l.shortlisted || false,
-        rejected: l.rejected || false,
-        appointment_date: l.appointment_date || null,
-        appointment_time: l.appointment_time || null,
+        notification_id:      l.id,
+        donor_id:             l.donor_id,
+        donor_name:           donor.name || 'Donor',
+        donor_phone:          donor.contact_phone || null,
+        blood_group:          donor.blood_group_verified || donor.blood_group_self_reported || request.blood_group,
+        response_at:          l.response_at,
+        appointment_date:     l.appointment_date || null,
+        appointment_time:     l.appointment_time || null,
         appointment_notified: l.appointment_notified || false,
-        arrived: l.arrived || false,
-        donated: l.donated || false,
-        units_donated: l.units_donated || null,
-        questionnaire: l.questionnaire || null,
+        arrived:              l.arrived || false,
+        donated:              l.donated || false,
+        units_donated:        l.units_donated || null,
+        hb_level:             l.hb_level || null,
       };
     })
     .sort((a, b) => (a.response_at > b.response_at ? 1 : -1));
 }
 
-/** Shortlist or reject an accepted donor */
-export async function setDonorShortlist(requestId, notificationId, action, actor) {
-  // action: 'shortlist' | 'reject'
-  const request = await getDoc(COLLECTIONS.requests, requestId);
-  if (!request) throw notFound('Request not found');
-  if (actor.role !== 'BLOOD_BANK_STAFF' || actor.institution_id !== request.institution_id) throw forbidden();
-
-  const log = await getDoc(COLLECTIONS.notifications, notificationId);
-  if (!log || log.request_id !== requestId) throw notFound('Donor notification not found');
-  if (log.response !== 'ACCEPTED') throw conflict('Can only shortlist/reject donors who accepted');
-
-  await updateDoc(COLLECTIONS.notifications, notificationId, {
-    shortlisted: action === 'shortlist',
-    rejected: action === 'reject',
-  });
-
-  await recordAudit({
-    action: action === 'shortlist' ? 'DONOR_SHORTLISTED' : 'DONOR_REJECTED',
-    actor,
-    institution_id: request.institution_id,
-    entity_type: 'Notification',
-    entity_id: notificationId,
-    note: `${action} by ${actor.name}`,
-  });
-
-  return { done: true };
-}
-
-/** Assign appointment date + time to a shortlisted donor */
 export async function assignAppointment(requestId, notificationId, { appointment_date, appointment_time }, actor) {
   const request = await getDoc(COLLECTIONS.requests, requestId);
   if (!request) throw notFound('Request not found');
@@ -526,18 +475,15 @@ export async function assignAppointment(requestId, notificationId, { appointment
 
   const log = await getDoc(COLLECTIONS.notifications, notificationId);
   if (!log || log.request_id !== requestId) throw notFound('Donor notification not found');
-  if (!log.shortlisted) throw conflict('Assign an appointment only to shortlisted donors');
 
   await updateDoc(COLLECTIONS.notifications, notificationId, {
     appointment_date,
-    appointment_time,
+    appointment_time: appointment_time || '',
     appointment_notified: false,
   });
-
-  return { done: true, appointment_date, appointment_time };
+  return { done: true };
 }
 
-/** Send WhatsApp + in-app notification to donor about their appointment */
 export async function notifyAppointment(requestId, notificationId, actor) {
   const request = await getDoc(COLLECTIONS.requests, requestId);
   if (!request) throw notFound('Request not found');
@@ -548,85 +494,61 @@ export async function notifyAppointment(requestId, notificationId, actor) {
   if (!log.appointment_date) throw badRequest('Set an appointment date first');
 
   const institution = await getDoc(COLLECTIONS.institutions, request.institution_id);
-  const donors = await listDocs(COLLECTIONS.donors);
-  const donor = donors.find(d => d.id === log.donor_id);
+  const donors      = await listDocs(COLLECTIONS.donors);
+  const donor       = donors.find(d => d.id === log.donor_id);
   if (!donor) throw notFound('Donor not found');
 
   const message =
-    `🩸 *Donation Appointment Confirmed*
+    `🩸 *Donation Appointment Confirmed*\n\n` +
+    `Hello ${donor.name},\n` +
+    `📅 Date: *${log.appointment_date}*\n` +
+    `🕐 Time: *${log.appointment_time || 'To be confirmed'}*\n` +
+    `🏥 Location: *${institution?.name || 'Blood bank'}*\n\n` +
+    `Please eat well before coming and carry a photo ID.\n\n` +
+    `_Raktasetu_`;
 
-` +
-    `Hello ${donor.name},
-` +
-    `Your blood donation appointment has been scheduled:
-
-` +
-    `📅 Date: *${log.appointment_date}*
-` +
-    `🕐 Time: *${log.appointment_time || 'To be confirmed'}*
-` +
-    `🏥 Location: *${institution?.name || 'Blood bank'}*
-
-` +
-    `Please eat well before coming and carry a photo ID.
-
-` +
-    `_Raktasetu — consumption-calibrated blood supply_`;
-
-  // Send WhatsApp
   if (donor.contact_phone) {
     sendDonorWhatsApp(donor.contact_phone, {
-      donorName: donor.name,
-      bloodGroup: request.blood_group,
-      institutionName: institution?.name || '',
-      urgency: request.urgency,
+      donorName: donor.name, bloodGroup: request.blood_group,
+      institutionName: institution?.name || '', urgency: request.urgency,
       notificationId: log.id,
     }).catch(e => console.error('[Appointment] WhatsApp error:', e));
   }
 
-  // Update in-app notification message
   await updateDoc(COLLECTIONS.notifications, notificationId, {
     appointment_notified: true,
     appointment_notified_at: new Date().toISOString(),
     message,
   });
-
   return { done: true };
 }
 
-/** Mark a specific donor as arrived */
 export async function markDonorArrived(requestId, notificationId, actor) {
   const request = await getDoc(COLLECTIONS.requests, requestId);
   if (!request) throw notFound('Request not found');
   if (actor.role !== 'BLOOD_BANK_STAFF' || actor.institution_id !== request.institution_id) throw forbidden();
 
   const log = await getDoc(COLLECTIONS.notifications, notificationId);
-  if (!log || log.request_id !== requestId) throw notFound('Donor notification not found');
+  if (!log || log.request_id !== requestId) throw notFound('Notification not found');
 
   await updateDoc(COLLECTIONS.notifications, notificationId, {
     arrived: true,
     arrived_at: new Date().toISOString(),
   });
-
   return { done: true };
 }
 
-/**
- * Record a donation for a specific donor.
- * Updates stock, donor record, checks threshold — auto-closes request if met.
- */
 export async function recordIndividualDonation(requestId, notificationId, { units, hb_level }, actor) {
   const request = await getDoc(COLLECTIONS.requests, requestId);
   if (!request) throw notFound('Request not found');
   if (actor.role !== 'BLOOD_BANK_STAFF' || actor.institution_id !== request.institution_id) throw forbidden();
 
   const log = await getDoc(COLLECTIONS.notifications, notificationId);
-  if (!log || log.request_id !== requestId) throw notFound('Donor notification not found');
+  if (!log || log.request_id !== requestId) throw notFound('Notification not found');
   if (log.donated) throw conflict('Donation already recorded for this donor');
 
   const unitsNum = Math.max(1, Math.round(Number(units) || 1));
 
-  // 1. Record in donation_records + update donor's last_donation_date
   await recordDonation({
     donor_id: log.donor_id,
     institution_id: request.institution_id,
@@ -636,7 +558,6 @@ export async function recordIndividualDonation(requestId, notificationId, { unit
     date: new Date().toISOString().slice(0, 10),
   }, actor);
 
-  // 2. Mark notification as donated
   await updateDoc(COLLECTIONS.notifications, notificationId, {
     donated: true,
     donated_at: new Date().toISOString(),
@@ -644,60 +565,37 @@ export async function recordIndividualDonation(requestId, notificationId, { unit
     hb_level: hb_level || null,
   });
 
-  // 3. Update stock — add the donated units
+  // Update stock
   const stockRows = await stockLevels(request.institution_id);
-  const stockRow = stockRows.find(s => s.blood_group === request.blood_group);
-  const currentStock = stockRow?.units_available ?? 0;
-  const newStock = currentStock + unitsNum;
+  const stockRow  = stockRows.find(s => s.blood_group === request.blood_group);
+  const newStock  = (stockRow?.units_available ?? 0) + unitsNum;
+
+  const { setStock } = await import('./thresholdService.js');
   await setStock(request.institution_id, request.blood_group, newStock, actor);
 
-  // 4. Check if total donated across all donors meets units_needed
-  const allLogs = await listDocs(COLLECTIONS.notifications, [['request_id', '==', requestId]]);
-  const totalDonated = allLogs.filter(l => l.donated).reduce((s, l) => s + (l.units_donated || 1), 0) + 
-                       (log.donated ? 0 : unitsNum); // include current
-  
-  // Recalculate with the just-updated log included
-  const logsAfter = await listDocs(COLLECTIONS.notifications, [['request_id', '==', requestId]]);
-  const totalDonatedAfter = logsAfter.filter(l => l.donated).reduce((s, l) => s + (l.units_donated || 1), 0);
+  // Check if total donated meets units_needed — auto-close if so
+  const allLogs      = await listDocs(COLLECTIONS.notifications, [['request_id', '==', requestId]]);
+  const totalDonated = allLogs.filter(l => l.donated).reduce((s, l) => s + (l.units_donated || 1), 0);
+  const threshold    = stockRow?.confirmed_threshold ?? null;
+  const autoClose    = totalDonated >= request.units_needed;
 
-  // 5. Check if stock is now above threshold — auto-close if so
-  const threshold = stockRow?.confirmed_threshold ?? null;
-  const autoClose = threshold !== null && newStock > threshold && totalDonatedAfter >= request.units_needed;
-
-  if (autoClose || totalDonatedAfter >= request.units_needed) {
-    // Move request to DONATED then CLOSED
-    if (['ACCEPTED', 'CONFIRMED', 'ARRIVED', 'NOTIFIED'].includes(request.state)) {
-      // Try to advance through states to DONATED
-      const currentState = request.state;
-      const stateOrder = ['NOTIFIED', 'ACCEPTED', 'CONFIRMED', 'ARRIVED', 'DONATED'];
-      let current = request;
-      for (const targetState of stateOrder.slice(stateOrder.indexOf(currentState) + 1)) {
-        if (canTransition(current.state, targetState)) {
-          current = await transition(current, targetState, actor,
-            { donated_units_total: totalDonatedAfter },
-            `Auto-advanced: ${totalDonatedAfter} units donated${autoClose ? ', stock above threshold' : ''}`
-          );
-        }
-        if (targetState === 'DONATED') break;
+  if (autoClose && ['NOTIFIED','ACCEPTED','CONFIRMED','ARRIVED'].includes(request.state)) {
+    const stateOrder = ['NOTIFIED','ACCEPTED','CONFIRMED','ARRIVED','DONATED'];
+    let current = request;
+    for (const s of stateOrder.slice(stateOrder.indexOf(current.state) + 1)) {
+      if (canTransition(current.state, s)) {
+        current = await transition(current, s, actor, {}, 'Auto-advanced: donation target met');
       }
+      if (s === 'DONATED') break;
     }
   }
 
   await recordAudit({
-    action: 'INDIVIDUAL_DONATION_RECORDED',
-    actor,
+    action: 'INDIVIDUAL_DONATION_RECORDED', actor,
     institution_id: request.institution_id,
-    entity_type: 'Request',
-    entity_id: requestId,
-    note: `${unitsNum} unit(s) from donor ${log.donor_id}. New stock: ${newStock}. ${autoClose ? 'Request auto-closed — stock above threshold.' : ''}`,
+    entity_type: 'Request', entity_id: requestId,
+    note: `${unitsNum} unit(s). New stock: ${newStock}.${autoClose ? ' Auto-closed.' : ''}`,
   });
 
-  return {
-    done: true,
-    units_donated: unitsNum,
-    new_stock: newStock,
-    total_donated: totalDonatedAfter,
-    auto_closed: autoClose,
-    threshold,
-  };
+  return { done: true, units_donated: unitsNum, new_stock: newStock, total_donated: totalDonated, auto_closed: autoClose, threshold };
 }
